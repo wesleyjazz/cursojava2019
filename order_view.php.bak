@@ -1,0 +1,342 @@
+<?php
+session_start();
+require_once 'db.php';
+#require_once 'app/controllers/AuthController.php';
+
+if (!isset($_SESSION['user_id'])) {
+    header('Location: auth/login.php');
+    exit();
+}
+
+$pdo = Database::getInstance();
+$error = null;
+$success = null;
+
+// Obter ID da ordem
+$orderId = $_GET['id'] ?? null;
+if (!$orderId) {
+    header('Location: orders.php');
+    exit();
+}
+
+// Buscar dados da ordem
+try {
+    $stmt = $pdo->prepare("SELECT 
+        o.*, 
+        m.name as machine_name,
+        m.model as machine_model,
+        u.username as technician,
+        u.email as technician_email
+        FROM service_orders o
+        LEFT JOIN machines m ON o.machine_id = m.id
+        LEFT JOIN users u ON o.user_id = u.id
+        WHERE o.id = ?");
+    $stmt->execute([$orderId]);
+    $order = $stmt->fetch();
+
+    if (!$order) {
+        throw new Exception("Ordem não encontrada");
+    }
+
+    // Buscar anexos
+    $attachments = $pdo->prepare("SELECT * FROM attachments WHERE order_id = ?");
+    $attachments->execute([$orderId]);
+    $attachments = $attachments->fetchAll();
+
+    // Buscar histórico de status
+    $history = $pdo->prepare("SELECT * FROM order_history WHERE order_id = ? ORDER BY created_at DESC");
+    $history->execute([$orderId]);
+    $history = $history->fetchAll();
+
+} catch (PDOException $e) {
+    die("Erro ao carregar ordem: " . $e->getMessage());
+}
+
+// Processar atualização de status
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    try {
+        // Atualizar status
+        if (isset($_POST['update_status'])) {
+            $newStatus = $_POST['status'];
+            $stmt = $pdo->prepare("UPDATE service_orders SET status = ? WHERE id = ?");
+            $stmt->execute([$newStatus, $orderId]);
+
+            // Registrar no histórico
+            $stmt = $pdo->prepare("INSERT INTO order_history 
+                (order_id, user_id, action, details)
+                VALUES (?, ?, 'status', ?)");
+            $stmt->execute([
+                $orderId,
+                $_SESSION['user_id'],
+                "Status alterado para: " . ucfirst($newStatus)
+            ]);
+
+            $_SESSION['success'] = "Status atualizado com sucesso!";
+        }
+
+        // Adicionar comentário
+        if (!empty($_POST['comment'])) {
+            $stmt = $pdo->prepare("INSERT INTO order_comments 
+                (order_id, user_id, comment)
+                VALUES (?, ?, ?)");
+            $stmt->execute([
+                $orderId,
+                $_SESSION['user_id'],
+                htmlspecialchars($_POST['comment'])
+            ]);
+            $_SESSION['success'] = "Comentário adicionado!";
+        }
+
+        // Upload de novos anexos
+        if (!empty($_FILES['new_attachments']['name'][0])) {
+            $uploadDir = __DIR__ . '/../assets/uploads/';
+            
+            foreach ($_FILES['new_attachments']['tmp_name'] as $key => $tmpName) {
+                $fileType = mime_content_type($tmpName);
+                $allowedTypes = ['image/jpeg', 'image/png', 'application/pdf'];
+                
+                if (!in_array($fileType, $allowedTypes)) {
+                    continue;
+                }
+
+                $fileName = uniqid() . '_' . basename($_FILES['new_attachments']['name'][$key]);
+                $targetPath = $uploadDir . $fileName;
+
+                if (move_uploaded_file($tmpName, $targetPath)) {
+                    $stmt = $pdo->prepare("INSERT INTO attachments (order_id, file_path) VALUES (?, ?)");
+                    $stmt->execute([$orderId, $fileName]);
+                }
+            }
+            $_SESSION['success'] = "Arquivos anexados com sucesso!";
+        }
+
+        header("Location: order_view.php?id=$orderId");
+        exit();
+
+    } catch (Exception $e) {
+        $error = $e->getMessage();
+    }
+}
+
+include 'header.php';
+?>
+
+<div class="container">
+    <div class="card shadow-lg mt-4">
+        <div class="card-header bg-primary text-white">
+            <div class="d-flex justify-content-between align-items-center">
+                <h3 class="mb-0">
+                    <i class="bi bi-clipboard-data"></i> Ordem #<?= $orderId ?>
+                    <span class="badge bg-<?= match($order['status']) {
+                        'aberta' => 'danger',
+                        'em_andamento' => 'warning',
+                        'concluida' => 'success'
+                    } ?> ms-2">
+                        <?= ucfirst($order['status']) ?>
+                    </span>
+                </h3>
+                <a href="orders.php" class="btn btn-light">
+                    <i class="bi bi-arrow-left"></i> Voltar
+                </a>
+            </div>
+        </div>
+
+        <div class="card-body">
+            <?php if ($error): ?>
+                <div class="alert alert-danger"><?= $error ?></div>
+            <?php endif; ?>
+            <?php if (isset($_SESSION['success'])): ?>
+                <div class="alert alert-success"><?= $_SESSION['success'] ?></div>
+                <?php unset($_SESSION['success']); ?>
+            <?php endif; ?>
+
+            <div class="row">
+                <!-- Detalhes Principais -->
+                <div class="col-md-8">
+                    <div class="card mb-4">
+                        <div class="card-header">
+                            <h5 class="mb-0"><i class="bi bi-info-circle"></i> Detalhes da Ordem</h5>
+                        </div>
+                        <div class="card-body">
+                            <dl class="row">
+                                <dt class="col-sm-3">Máquina</dt>
+                                <dd class="col-sm-9"><?= htmlspecialchars($order['machine_name']) ?> (<?= htmlspecialchars($order['machine_model']) ?>)</dd>
+
+                                <dt class="col-sm-3">Tipo</dt>
+                                <dd class="col-sm-9"><?= ucfirst($order['type']) ?></dd>
+
+                                <dt class="col-sm-3">Prioridade</dt>
+                                <dd class="col-sm-9">
+                                    <span class="badge bg-<?= match($order['priority']) {
+                                        'baixa' => 'success',
+                                        'media' => 'warning',
+                                        'alta' => 'danger'
+                                    } ?>">
+                                        <?= ucfirst($order['priority']) ?>
+                                    </span>
+                                </dd>
+
+                                <dt class="col-sm-3">Descrição</dt>
+                                <dd class="col-sm-9"><?= nl2br(htmlspecialchars($order['description'])) ?></dd>
+
+                                <dt class="col-sm-3">Técnico</dt>
+                                <dd class="col-sm-9">
+                                    <?= $order['technician'] ? htmlspecialchars($order['technician']) : 'Não atribuído' ?>
+                                    <?php if ($order['technician_email']): ?>
+                                        <br><a href="mailto:<?= $order['technician_email'] ?>"><?= $order['technician_email'] ?></a>
+                                    <?php endif; ?>
+                                </dd>
+
+                                <dt class="col-sm-3">Datas</dt>
+                                <dd class="col-sm-9">
+                                    <ul class="list-unstyled">
+                                        <li>Criação: <?= date('d/m/Y H:i', strtotime($order['created_at'])) ?></li>
+                                        <?php if ($order['scheduled_date']): ?>
+                                        <li>Agendada: <?= date('d/m/Y H:i', strtotime($order['scheduled_date'])) ?></li>
+                                        <?php endif; ?>
+                                        <?php if ($order['completed_date']): ?>
+                                        <li>Conclusão: <?= date('d/m/Y H:i', strtotime($order['completed_date'])) ?></li>
+                                        <?php endif; ?>
+                                    </ul>
+                                </dd>
+                            </dl>
+                        </div>
+                    </div>
+
+                    <!-- Comentários -->
+                    <div class="card mb-4">
+                        <div class="card-header">
+                            <h5 class="mb-0"><i class="bi bi-chat-dots"></i> Comentários</h5>
+                        </div>
+                        <div class="card-body">
+                            <form method="POST">
+                                <div class="mb-3">
+                                    <textarea name="comment" class="form-control" rows="3" 
+                                              placeholder="Adicione um novo comentário..."></textarea>
+                                </div>
+                                <button type="submit" class="btn btn-primary">
+                                    <i class="bi bi-send"></i> Enviar Comentário
+                                </button>
+                            </form>
+
+                            <div class="mt-4">
+                                <?php foreach ($comments as $comment): ?>
+                                <div class="card mb-2">
+                                    <div class="card-body">
+                                        <div class="d-flex justify-content-between">
+                                            <div>
+                                                <strong><?= htmlspecialchars($comment['username']) ?></strong>
+                                                <small class="text-muted ms-2">
+                                                    <?= date('d/m/Y H:i', strtotime($comment['created_at'])) ?>
+                                                </small>
+                                            </div>
+                                        </div>
+                                        <p class="mt-2 mb-0"><?= nl2br(htmlspecialchars($comment['comment'])) ?></p>
+                                    </div>
+                                </div>
+                                <?php endforeach; ?>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Ações e Anexos -->
+                <div class="col-md-4">
+                    <!-- Atualização de Status -->
+                    <div class="card mb-4">
+                        <div class="card-header">
+                            <h5 class="mb-0"><i class="bi bi-gear"></i> Ações</h5>
+                        </div>
+                        <div class="card-body">
+                            <form method="POST">
+                                <div class="mb-3">
+                                    <label class="form-label">Alterar Status</label>
+                                    <select name="status" class="form-select">
+                                        <?php foreach (['aberta', 'em_andamento', 'concluida'] as $status): ?>
+                                        <option value="<?= $status ?>" <?= $order['status'] === $status ? 'selected' : '' ?>>
+                                            <?= ucfirst($status) ?>
+                                        </option>
+                                        <?php endforeach; ?>
+                                    </select>
+                                </div>
+                                <button type="submit" name="update_status" class="btn btn-warning w-100">
+                                    <i class="bi bi-arrow-repeat"></i> Atualizar Status
+                                </button>
+                            </form>
+                        </div>
+                    </div>
+
+                    <!-- Anexos -->
+                    <div class="card">
+                        <div class="card-header">
+                            <h5 class="mb-0"><i class="bi bi-paperclip"></i> Anexos</h5>
+                        </div>
+                        <div class="card-body">
+                            <form method="POST" enctype="multipart/form-data">
+                                <div class="mb-3">
+                                    <input type="file" name="new_attachments[]" multiple 
+                                           class="form-control" accept=".pdf,.jpg,.jpeg,.png">
+                                    <small class="text-muted">Formatos permitidos: PDF, JPG, PNG</small>
+                                </div>
+                                <button type="submit" class="btn btn-secondary w-100">
+                                    <i class="bi bi-upload"></i> Adicionar Anexos
+                                </button>
+                            </form>
+
+                            <div class="mt-4">
+                                <?php foreach ($attachments as $file): ?>
+                                <div class="d-flex justify-content-between align-items-center mb-2">
+                                    <div>
+                                        <a href="../assets/uploads/<?= $file['file_path'] ?>" 
+                                           target="_blank" 
+                                           class="text-decoration-none">
+                                            <i class="bi bi-file-earmark"></i> <?= $file['file_path'] ?>
+                                        </a>
+                                        <small class="text-muted ms-2">
+                                            <?= date('d/m/Y H:i', strtotime($file['uploaded_at'])) ?>
+                                        </small>
+                                    </div>
+                                    <?php if (strpos(mime_content_type("../assets/uploads/" . $file['file_path']), 'image') !== false): ?>
+                                    <a href="#" class="preview-image" data-src="../assets/uploads/<?= $file['file_path'] ?>">
+                                        <i class="bi bi-eye"></i>
+                                    </a>
+                                    <?php endif; ?>
+                                </div>
+                                <?php endforeach; ?>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Modal para visualização de imagens -->
+<div class="modal fade" id="imagePreviewModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Pré-visualização</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body text-center">
+                <img src="" class="img-fluid" id="previewImage">
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+// Pré-visualização de imagens
+document.querySelectorAll('.preview-image').forEach(item => {
+    item.addEventListener('click', e => {
+        e.preventDefault();
+        const src = item.dataset.src;
+        document.getElementById('previewImage').src = src;
+        new bootstrap.Modal(document.getElementById('imagePreviewModal')).show();
+    });
+});
+</script>
+
+<?php include 'footer.php'; ?>

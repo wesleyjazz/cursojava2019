@@ -1,0 +1,133 @@
+<?php
+session_start();
+require_once 'db.php';
+#require_once 'app/controllers/AuthController.php';
+
+if (!isset($_SESSION['user_id'])) {
+    header('Location: login.php');
+    exit();
+}
+
+$pdo = Database::getInstance();
+
+// Filtros
+$status = $_GET['status'] ?? 'all';
+$priority = $_GET['priority'] ?? 'all';
+$search = isset($_GET['search']) ? "%{$_GET['search']}%" : '%';
+
+// Consulta com filtros
+$query = "SELECT o.*, m.name as machine_name, u.username as technician 
+          FROM service_orders o
+          LEFT JOIN machines m ON o.machine_id = m.id
+          LEFT JOIN users u ON o.user_id = u.id
+          WHERE (o.description LIKE ? OR m.name LIKE ?)";
+
+$params = [$search, $search];
+
+if ($status !== 'all') {
+    $query .= " AND o.status = ?";
+    $params[] = $status;
+}
+
+if ($priority !== 'all') {
+    $query .= " AND o.priority = ?";
+    $params[] = $priority;
+}
+
+$query .= " ORDER BY o.created_at DESC";
+
+$stmt = $pdo->prepare($query);
+$stmt->execute($params);
+$orders = $stmt->fetchAll();
+
+include 'header.php';
+?>
+
+<div class="container">
+    <div class="card shadow-lg mt-4">
+        <div class="card-header bg-primary text-white">
+            <h3><i class="bi bi-clipboard-checklist"></i> Ordens de Serviço</h3>
+        </div>
+
+        <div class="card-body">
+            <!-- Filtros -->
+            <form class="row g-3 mb-4">
+                <div class="col-md-3">
+                    <select name="status" class="form-select">
+                        <option value="all" <?= $status === 'all' ? 'selected' : '' ?>>Todos Status</option>
+                        <?php foreach (['aberta', 'em_andamento', 'concluida'] as $s): ?>
+                        <option value="<?= $s ?>" <?= $status === $s ? 'selected' : '' ?>>
+                            <?= ucfirst($s) ?>
+                        </option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                
+                <div class="col-md-3">
+                    <select name="priority" class="form-select">
+                        <option value="all" <?= $priority === 'all' ? 'selected' : '' ?>>Todas Prioridades</option>
+                        <?php foreach (['baixa', 'media', 'alta'] as $p): ?>
+                        <option value="<?= $p ?>" <?= $priority === $p ? 'selected' : '' ?>>
+                            <?= ucfirst($p) ?>
+                        </option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                
+                <div class="col-md-4">
+                    <input type="text" name="search" class="form-control" 
+                           placeholder="Pesquisar por descrição ou máquina..."
+                           value="<?= htmlspecialchars($_GET['search'] ?? '') ?>">
+                </div>
+                
+                <div class="col-md-2">
+                    <button type="submit" class="btn btn-primary w-100">
+                        <i class="bi bi-funnel"></i> Filtrar
+                    </button>
+                </div>
+            </form>
+
+	    <!-- Lista de Ordens -->
+            <div class="list-group">
+                <?php foreach ($orders as $order): ?>
+                <a href="order_view.php?id=<?= $order['id'] ?>" 
+                   class="list-group-item list-group-item-action">
+                    <div class="d-flex w-100 justify-content-between">
+                        <h5 class="mb-1">
+                            <?= htmlspecialchars($order['machine_name']) ?> 
+                            <span class="badge bg-<?= match($order['priority']) {
+                                'baixa' => 'success',
+                                'media' => 'warning',
+                                'alta' => 'danger'
+                            } ?> ms-2">
+                                <?= ucfirst($order['priority']) ?>
+                            </span>
+                        </h5>
+                        <small class="text-<?= match($order['status']) {
+                            'aberta' => 'danger',
+                            'em_andamento' => 'primary',
+                            'concluida' => 'success'
+                        } ?>">
+                            <?= ucfirst($order['status']) ?>
+                        </small>
+                    </div>
+                    <p class="mb-1"><?= htmlspecialchars($order['description']) ?></p>
+                    <small class="text-muted">
+                        <i class="bi bi-person"></i> <?= $order['technician'] ?? 'Não atribuído' ?> • 
+                        <?= date('d/m/Y H:i', strtotime($order['created_at'])) ?>
+                    </small>
+                </a>
+                <?php endforeach; ?>
+            </div>
+
+            <!-- Botão Nova Ordem -->
+            <div class="mt-4 text-center">
+                <a href="order_create.php" class="btn btn-success btn-lg">
+                    <i class="bi bi-plus-circle"></i> Criar Nova Ordem
+                </a>
+            </div>
+        </div>
+    </div>
+</div>
+
+<?php include 'footer.php'; ?>

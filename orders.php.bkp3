@@ -1,0 +1,163 @@
+<?php
+session_start();
+require_once 'db.php';
+#require_once 'app/controllers/AuthController.php';
+
+if (!isset($_SESSION['user_id'])) {
+    header('Location: login.php');
+    exit();
+}
+
+$pdo = Database::getInstance();
+
+// Filtros
+$status = $_GET['status'] ?? 'all';
+$search = isset($_GET['search']) ? "%{$_GET['search']}%" : '%';
+
+// Consulta com filtros
+$query = "SELECT 
+    o.id, 
+    o.type, 
+    o.priority, 
+    o.status, 
+    o.created_at,
+    m.name as machine_name,
+    u.username as technician
+    FROM service_orders o
+    LEFT JOIN machines m ON o.machine_id = m.id
+    LEFT JOIN users u ON o.user_id = u.id
+    WHERE (o.description LIKE ? OR m.name LIKE ?)";
+
+$params = [$search, $search];
+
+if ($status !== 'all') {
+    $query .= " AND o.status = ?";
+    $params[] = $status;
+}
+
+$query .= " ORDER BY o.created_at DESC";
+
+$stmt = $pdo->prepare($query);
+$stmt->execute($params);
+$orders = $stmt->fetchAll();
+
+include 'header.php';
+?>
+
+<div class="container">
+    <div class="card shadow-lg mt-4">
+        <div class="card-header bg-primary text-white">
+            <div class="d-flex justify-content-between align-items-center">
+                <h3 class="mb-0"><i class="bi bi-clipboard-checklist"></i> Ordens de Serviço</h3>
+                <a href="order_create.php" class="btn btn-light">
+                    <i class="bi bi-plus-circle"></i> Nova Ordem
+                </a>
+            </div>
+        </div>
+
+        <div class="card-body">
+            <!-- Filtros e Busca -->
+            <div class="row mb-4 g-3">
+                <div class="col-md-4">
+                    <form method="GET" class="input-group">
+                        <select name="status" class="form-select" onchange="this.form.submit()">
+                            <option value="all" <?= $status === 'all' ? 'selected' : '' ?>>Todos Status</option>
+                            <option value="aberta" <?= $status === 'aberta' ? 'selected' : '' ?>>Abertas</option>
+                            <option value="em_andamento" <?= $status === 'em_andamento' ? 'selected' : '' ?>>Em Andamento</option>
+                            <option value="concluida" <?= $status === 'concluida' ? 'selected' : '' ?>>Concluídas</option>
+                        </select>
+                    </form>
+                </div>
+                
+                <div class="col-md-8">
+                    <form method="GET">
+                        <div class="input-group">
+                            <input type="text" name="search" class="form-control" 
+                                placeholder="Pesquisar por descrição ou máquina..."
+                                value="<?= htmlspecialchars($_GET['search'] ?? '') ?>">
+                            <button type="submit" class="btn btn-primary">
+                                <i class="bi bi-search"></i>
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+
+            <!-- Tabela de Ordens -->
+            <div class="table-responsive">
+                <table class="table table-hover align-middle">
+                    <thead class="table-light">
+                        <tr>
+                            <th>Máquina</th>
+                            <th>Tipo</th>
+                            <th>Prioridade</th>
+                            <th>Status</th>
+                            <th>Técnico</th>
+                            <th>Criação</th>
+                            <th class="text-end">Ações</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach ($orders as $order): ?>
+                        <tr>
+                            <td><?= htmlspecialchars($order['machine_name']) ?></td>
+                            <td><?= ucfirst($order['type']) ?></td>
+                            <td>
+                                <span class="badge bg-<?= match($order['priority']) {
+                                    'baixa' => 'success',
+                                    'media' => 'warning',
+                                    'alta' => 'danger'
+                                } ?>">
+                                    <?= ucfirst($order['priority']) ?>
+                                </span>
+                            </td>
+                            <td>
+                                <span class="badge bg-<?= match($order['status']) {
+                                    'aberta' => 'secondary',
+                                    'em_andamento' => 'primary',
+                                    'concluida' => 'success'
+                                } ?>">
+                                    <?= ucfirst($order['status']) ?>
+                                </span>
+                            </td>
+                            <td><?= htmlspecialchars($order['technician'] ?? 'Não atribuído') ?></td>
+                            <td><?= date('d/m/Y H:i', strtotime($order['created_at'])) ?></td>
+                            <td class="text-end">
+                                <div class="btn-group">
+                                    <a href="order_view.php?id=<?= $order['id'] ?>" 
+                                       class="btn btn-sm btn-info"
+                                       title="Visualizar">
+                                        <i class="bi bi-eye"></i>
+                                    </a>
+                                    <a href="order_edit.php?id=<?= $order['id'] ?>" 
+                                       class="btn btn-sm btn-warning"
+                                       title="Editar">
+                                        <i class="bi bi-pencil"></i>
+                                    </a>
+                                    <a href="attachments_view.php?id=<?= $order['id'] ?>" 
+                                       class="btn btn-sm btn-secondary"
+                                       title="Anexos">
+                                        <i class="bi bi-paperclip"></i>
+                                    </a>
+                                    <a href="order_delete.php?id=<?= $order['id'] ?>" 
+                                       class="btn btn-sm btn-danger"
+                                       title="Excluir"
+                                       onclick="return confirm('Tem certeza que deseja excluir esta ordem?')">
+                                        <i class="bi bi-trash"></i>
+                                    </a>
+                                </div>
+                            </td>
+                        </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+
+            <?php if (empty($orders)): ?>
+                <div class="alert alert-info mt-4">Nenhuma ordem encontrada</div>
+            <?php endif; ?>
+        </div>
+    </div>
+</div>
+
+<?php include 'footer.php'; ?>

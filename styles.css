@@ -1,0 +1,50 @@
+:root {
+    --primary-color: #2c3e50;
+    --secondary-color: #3498db;
+    --success-color: #27ae60;
+    --warning-color: #f1c40f;
+    --danger-color: #e74c3c;
+}
+
+body {
+    background-color: #f8f9fa;
+    min-height: 100vh;
+}
+
+.card {
+    border: none;
+    border-radius: 15px;
+    transition: transform 0.3s ease;
+}
+
+.card:hover {
+    transform: translateY(-5px);
+}
+
+.table-hover tbody tr:hover {
+    background-color: rgba(var(--primary-color), 0.05);
+}
+
+.badge {
+    padding: 0.5em 0.75em;
+    border-radius: 10px;
+}
+
+.form-control:focus {
+    box-shadow: 0 0 0 0.25rem rgba(var(--secondary-color), 0.25);
+}
+
+.btn-primary {
+    background-color: var(--secondary-color);
+    border: none;
+}
+
+.btn-primary:hover {
+    background-color: #2980b9;
+}
+
+.status-badge {
+    font-size: 0.9em;
+    padding: 0.4em 0.8em;
+}
+

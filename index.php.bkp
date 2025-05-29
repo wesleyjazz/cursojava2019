@@ -1,0 +1,142 @@
+<?php
+session_start();
+require_once 'db.php';
+#require_once 'app/controllers/AuthController.php';
+
+if (!isset($_SESSION['user_id'])) {
+    header('Location: login.php');
+    exit();
+}
+
+$pdo = Database::getInstance();
+
+// Buscar dados para o dashboard
+try {
+    // Últimas ordens
+    $stmtOrders = $pdo->query("SELECT 
+        o.id, o.description, o.status, m.name as machine_name 
+        FROM service_orders o
+        LEFT JOIN machines m ON o.machine_id = m.id
+        ORDER BY o.created_at DESC LIMIT 5");
+    $latestOrders = $stmtOrders->fetchAll();
+
+    // Próximas manutenções
+    $stmtMaintenance = $pdo->query("SELECT 
+        m.name as machine_name, s.next_date, s.type 
+        FROM maintenance_schedules s
+        LEFT JOIN machines m ON s.machine_id = m.id
+        WHERE s.next_date >= CURDATE()
+        ORDER BY s.next_date ASC LIMIT 5");
+    $upcomingMaintenance = $stmtMaintenance->fetchAll();
+
+    // Estatísticas
+    $stmtStats = $pdo->query("SELECT 
+        COUNT(CASE WHEN status = 'aberta' THEN 1 END) as abertas,
+        COUNT(CASE WHEN status = 'em_andamento' THEN 1 END) as em_andamento,
+        COUNT(CASE WHEN status = 'concluida' THEN 1 END) as concluidas
+        FROM service_orders");
+    $stats = $stmtStats->fetch();
+
+} catch (PDOException $e) {
+    die("Erro ao carregar dados do dashboard: " . $e->getMessage());
+}
+
+include 'header.php';
+?>
+
+<div class="row">
+    <!-- Cards de Estatísticas -->
+    <div class="col-12 col-md-6 col-xl-3 mb-4">
+        <div class="card bg-primary text-white shadow">
+            <div class="card-body">
+                <h5 class="card-title"><i class="bi bi-exclamation-circle"></i> Abertas</h5>
+                <p class="display-4 mb-0"><?= $stats['abertas'] ?></p>
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-12 col-md-6 col-xl-3 mb-4">
+        <div class="card bg-warning text-dark shadow">
+            <div class="card-body">
+                <h5 class="card-title"><i class="bi bi-gear"></i> Em Andamento</h5>
+                <p class="display-4 mb-0"><?= $stats['em_andamento'] ?></p>
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-12 col-md-6 col-xl-3 mb-4">
+        <div class="card bg-success text-white shadow">
+            <div class="card-body">
+                <h5 class="card-title"><i class="bi bi-check-circle"></i> Concluídas</h5>
+                <p class="display-4 mb-0"><?= $stats['concluidas'] ?></p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row mt-4">
+    <!-- Gráfico -->
+    <div class="col-lg-8 mb-4">
+        <div class="card shadow">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="bi bi-bar-chart-line"></i> Estatísticas Mensais</h5>
+            </div>
+            <div class="card-body">
+                <canvas id="mainChart" style="height: 300px;"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <!-- Últimas Atividades -->
+    <div class="col-lg-4 mb-4">
+        <div class="card shadow">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="bi bi-clock-history"></i> Últimas Ordens</h5>
+            </div>
+            <div class="card-body">
+                <div class="list-group">
+                    <?php foreach ($latestOrders as $order): ?>
+                    <div class="list-group-item">
+                        <div class="d-flex justify-content-between">
+                            <h6 class="mb-1"><?= htmlspecialchars($order['machine_name']) ?></h6>
+                            <small class="text-<?= 
+                                match($order['status']) {
+                                    'aberta' => 'danger',
+                                    'em_andamento' => 'warning',
+                                    'concluida' => 'success'
+                                } ?>">
+                                <?= ucfirst($order['status']) ?>
+                            </small>
+                        </div>
+                        <p class="mb-1 text-muted"><?= htmlspecialchars($order['description']) ?></p>
+                    </div>
+                    <?php endforeach; ?>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+    // Gráfico Principal
+    const ctx = document.getElementById('mainChart').getContext('2d');
+    new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun'],
+            datasets: [{
+                label: 'Ordens de Serviço',
+                data: [12, 19, 3, 5, 2, 3],
+                borderColor: '#2c3e50',
+                tension: 0.4
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false
+        }
+    });
+</script>
+
+<?php include 'footer.php'; ?>

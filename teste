@@ -1,0 +1,18 @@
+
+        if ($stmt->execute($data)) {
+            $orderId = $pdo->lastInsertId();
+
+            // Processar anexos
+            if (!empty($_FILES['attachments']['name'][0])) {
+                $uploadDir = __DIR__ . 'uploads/';
+                
+                foreach ($_FILES['attachments']['tmp_name'] as $key => $tmpName) {
+                    $fileName = uniqid() . '_' . basename($_FILES['attachments']['name'][$key]);
+                    $targetPath = $uploadDir . $fileName;
+
+                    if (move_uploaded_file($tmpName, $targetPath)) {
+                        $stmt = $pdo->prepare("INSERT INTO order_attachments (order_id, file_path) VALUES (?, ?)");
+                        $stmt->execute([$orderId, $fileName]);
+                    }
+                }
+            }

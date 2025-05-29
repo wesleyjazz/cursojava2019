@@ -1,0 +1,227 @@
+<?php
+session_start();
+require_once 'db.php';
+#require_once 'app/controllers/AuthController.php';
+
+if (!isset($_SESSION['user_id'])) {
+    header('Location: login.php');
+    exit();
+}
+
+$pdo = Database::getInstance();
+$error = null;
+$success = null;
+
+// Obter ID da ordem
+$orderId = $_GET['id'] ?? null;
+if (!$orderId) {
+    header('Location: orders.php');
+    exit();
+}
+
+// Buscar dados da ordem
+try {
+    $stmt = $pdo->prepare("SELECT 
+        o.*, 
+        m.name as machine_name,
+        u.username as technician
+        FROM service_orders o
+        LEFT JOIN machines m ON o.machine_id = m.id
+        LEFT JOIN users u ON o.user_id = u.id
+        WHERE o.id = ?");
+    $stmt->execute([$orderId]);
+    $order = $stmt->fetch();
+
+    if (!$order) {
+        throw new Exception("Ordem não encontrada");
+    }
+
+    // Buscar listas para dropdowns
+    $machines = $pdo->query("SELECT id, name FROM machines ORDER BY name")->fetchAll();
+    $technicians = $pdo->query("SELECT id, username FROM users WHERE role = 'technician'")->fetchAll();
+
+} catch (PDOException $e) {
+    die("Erro ao carregar ordem: " . $e->getMessage());
+}
+
+// Processar formulário de edição
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    try {
+        // Validação
+        $required = ['machine_id', 'type', 'priority', 'status'];
+        foreach ($required as $field) {
+            if (empty($_POST[$field])) {
+                throw new Exception("O campo " . ucfirst($field) . " é obrigatório");
+            }
+        }
+
+        // Atualizar ordem
+        $stmt = $pdo->prepare("UPDATE service_orders SET
+            machine_id = :machine_id,
+            type = :type,
+            description = :description,
+            priority = :priority,
+            status = :status,
+            scheduled_date = :scheduled_date,
+            user_id = :user_id
+            WHERE id = :id");
+
+        $data = [
+            ':machine_id' => $_POST['machine_id'],
+            ':type' => $_POST['type'],
+            ':description' => htmlspecialchars($_POST['description']),
+            ':priority' => $_POST['priority'],
+            ':status' => $_POST['status'],
+            ':scheduled_date' => $_POST['scheduled_date'],
+            ':user_id' => $_POST['technician'],
+            ':id' => $orderId
+        ];
+
+        if ($stmt->execute($data)) {
+            $_SESSION['success'] = "Ordem atualizada com sucesso!";
+            header("Location: order_view.php?id=$orderId");
+            exit();
+        } else {
+            throw new Exception("Erro ao atualizar ordem");
+        }
+    } catch (Exception $e) {
+        $error = $e->getMessage();
+    }
+}
+
+include 'header.php';
+?>
+<div class="container">
+    <div class="card shadow-lg mt-4">
+        <div class="card-header bg-primary text-white">
+            <div class="d-flex justify-content-between align-items-center">
+                <h3 class="mb-0">
+                    <i class="bi bi-pencil-square"></i> Editar Ordem #<?= $orderId ?>
+                </h3>
+                <a href="order_view.php?id=<?= $orderId ?>" class="btn btn-light">
+                    <i class="bi bi-arrow-left"></i> Voltar
+                </a>
+            </div>
+        </div>
+
+        <div class="card-body">
+            <?php if ($error): ?>
+                <div class="alert alert-danger"><?= $error ?></div>
+            <?php endif; ?>
+
+            <form method="POST" class="needs-validation" novalidate>
+                <div class="row g-3">
+                    <!-- Seleção de Máquina -->
+                    <div class="col-md-6">
+                        <label class="form-label">Máquina <span class="text-danger">*</span></label>
+                        <select name="machine_id" class="form-select" required>
+                            <option value="">Selecione uma máquina</option>
+                            <?php foreach ($machines as $machine): ?>
+                                <option value="<?= $machine['id'] ?>" 
+                                    <?= $machine['id'] == $order['machine_id'] ? 'selected' : '' ?>>
+                                    <?= htmlspecialchars($machine['name']) ?>
+                                </option>
+                            <?php endforeach; ?>
+                        </select>
+                        <div class="invalid-feedback">
+                            Selecione uma máquina
+                        </div>
+                    </div>
+
+                    <!-- Tipo de Ordem -->
+                    <div class="col-md-6">
+                        <label class="form-label">Tipo <span class="text-danger">*</span></label>
+                        <select name="type" class="form-select" required>
+                            <option value="preventiva" <?= $order['type'] === 'preventiva' ? 'selected' : '' ?>>Preventiva</option>
+                            <option value="corretiva" <?= $order['type'] === 'corretiva' ? 'selected' : '' ?>>Corretiva</option>
+                        </select>
+                    </div>
+
+                    <!-- Prioridade -->
+                    <div class="col-md-4">
+                        <label class="form-label">Prioridade <span class="text-danger">*</span></label>
+                        <select name="priority" class="form-select" required>
+                            <option value="baixa" <?= $order['priority'] === 'baixa' ? 'selected' : '' ?>>Baixa</option>
+                            <option value="media" <?= $order['priority'] === 'media' ? 'selected' : '' ?>>Média</option>
+                            <option value="alta" <?= $order['priority'] === 'alta' ? 'selected' : '' ?>>Alta</option>
+                        </select>
+                    </div>
+
+                    <!-- Status -->
+                    <div class="col-md-4">
+                        <label class="form-label">Status <span class="text-danger">*</span></label>
+                        <select name="status" class="form-select" required>
+                            <option value="aberta" <?= $order['status'] === 'aberta' ? 'selected' : '' ?>>Aberta</option>
+                            <option value="em_andamento" <?= $order['status'] === 'em_andamento' ? 'selected' : '' ?>>Em Andamento</option>
+                            <option value="concluida" <?= $order['status'] === 'concluida' ? 'selected' : '' ?>>Concluída</option>
+                        </select>
+                    </div>
+
+                    <!-- Data Agendada -->
+                    <div class="col-md-4">
+                        <label class="form-label">Data Agendada</label>
+                        <input type="datetime-local" name="scheduled_date" 
+                               value="<?= date('Y-m-d\TH:i', strtotime($order['scheduled_date'])) ?>" 
+                               class="form-control">
+                    </div>
+
+                    <!-- Técnico Responsável -->
+                    <div class="col-md-6">
+                        <label class="form-label">Técnico</label>
+                        <select name="technician" class="form-select">
+                            <option value="">Não atribuído</option>
+                            <?php foreach ($technicians as $tech): ?>
+                                <option value="<?= $tech['id'] ?>" 
+                                    <?= $tech['id'] == $order['user_id'] ? 'selected' : '' ?>>
+                                    <?= htmlspecialchars($tech['username']) ?>
+                                </option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+
+                    <!-- Descrição -->
+                    <div class="col-12">
+                        <label class="form-label">Descrição <span class="text-danger">*</span></label>
+                        <textarea name="description" class="form-control" rows="5" required><?= htmlspecialchars($order['description']) ?></textarea>
+                    </div>
+
+			<!-- Anexar Arquivos -->
+			<div class="col-12">
+    				<label class="form-label">Anexar Arquivos</label>
+    				<input type="file" name="attachments[]" class="form-control" multiple>
+    				<small class="form-text text-muted">Selecione um ou mais arquivos para anexar.</small>
+			</div>
+			
+                    <!-- Botões -->
+                    <div class="col-12 mt-4">
+                        <button type="submit" class="btn btn-primary btn-lg">
+                            <i class="bi bi-save"></i> Salvar Alterações
+                        </button>
+                        <a href="order_view.php?id=<?= $orderId ?>" class="btn btn-secondary btn-lg">
+                            <i class="bi bi-x-circle"></i> Cancelar
+                        </a>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<script>
+// Validação do formulário
+(() => {
+  'use strict'
+  const forms = document.querySelectorAll('.needs-validation')
+  Array.from(forms).forEach(form => {
+    form.addEventListener('submit', event => {
+      if (!form.checkValidity()) {
+        event.preventDefault()
+        event.stopPropagation()
+      }
+      form.classList.add('was-validated')
+    }, false)
+  })
+})()
+</script>
+
+<?php include 'footer.php'; ?>
